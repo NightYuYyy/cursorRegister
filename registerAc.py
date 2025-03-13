@@ -243,6 +243,61 @@ class CursorRegistration:
             Utils.update_env_vars(env_updates)
         return token
 
+    def admin2_auto_register(self, wait_callback=None):
+        try:
+            self.moe = MoemailManager()
+            email_info = self.moe.create_email(email=self.email)
+            logger.debug(f"已创建邮箱 ： {email_info.data.get('email')}")
+            self.admin = True
+            self._safe_action(self.init_browser)
+            self._safe_action(self.fill_registration_form)
+            time.sleep(random.uniform(1, 4))
+            submit = self.tab.ele("@type=submit")
+            self.tab.actions.move_to(ele_or_loc=submit)
+            self.tab.actions.click(submit)
+
+            if not self._handle_page_transition(
+                    self.CURSOR_SIGNUP_URL,
+                    self.CURSOR_SIGNUP_PASSWORD_URL,
+                    "密码设置页面"
+            ):
+                raise Exception("无法进入密码设置页面")
+
+            self._safe_action(self.fill_password)
+            time.sleep(random.uniform(1, 4))
+            submit = self.tab.ele("@type=submit")
+            self.tab.actions.move_to(ele_or_loc=submit)
+            self.tab.actions.click(submit)
+
+            if not self._handle_page_transition(
+                    self.CURSOR_SIGNUP_PASSWORD_URL,
+                    self.CURSOR_EMAIL_VERIFICATION_URL,
+                    "邮箱验证页面"
+            ):
+                raise Exception("无法进入邮箱验证页面")
+
+            email_data = self.get_email_data()
+            verify_code = self.parse_cursor_verification_code(email_data)
+            time.sleep(random.uniform(2, 5))
+            self._safe_action(self.input_email_verification, verify_code)
+
+            if token := self._safe_action(self.get_cursor_token):
+                env_updates = {
+                    "COOKIES_STR": f"WorkosCursorSessionToken={token}",
+                    "EMAIL": self.email,
+                    "PASSWORD": self.password
+                }
+                Utils.update_env_vars(env_updates)
+                return token
+            return None
+
+        except Exception as e:
+            logger.error(f"注册过程发生错误: {str(e)}")
+            raise
+        finally:
+            if self.browser:
+                self.browser.quit()
+
     def _cursor_turnstile(self):
         max_retries = 5
         for retry in range(max_retries):

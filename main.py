@@ -1,5 +1,5 @@
 WINDOW_WIDTH = 460
-WINDOW_HEIGHT = 460
+WINDOW_HEIGHT = 520
 WINDOW_TITLE = "Cursor注册小助手"
 BACKUP_DIR = "env_backups"
 
@@ -26,7 +26,11 @@ class WindowConfig:
     title: str = WINDOW_TITLE
     backup_dir: str = BACKUP_DIR
     env_vars: List[Tuple[str, str]] = field(default_factory=lambda: [
-        ('DOMAIN', '域名'), ('EMAIL', '邮箱'), ('PASSWORD', '密码')
+        ('DOMAIN', '域名'), 
+        ('EMAIL', '邮箱'), 
+        ('PASSWORD', '密码'),
+        ('API_KEY', 'API密钥'),
+        ('MOE_MAIL_URL', '邮箱服务地址')
     ])
     buttons: List[Tuple[str, str]] = field(default_factory=lambda: [
         ("生成账号", "generate_account"),
@@ -40,7 +44,7 @@ class CursorApp:
         self.root = root
         self.config = WindowConfig()
         self.entries: Dict[str, ttk.Entry] = {}
-        self.selected_mode = tk.StringVar(value="semi")
+        self.selected_mode = tk.StringVar(value="admin")
 
         self.root.title(self.config.title)
         UI.center_window(self.root, self.config.width, self.config.height)

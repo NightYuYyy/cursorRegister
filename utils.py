@@ -328,49 +328,38 @@ class CursorManager:
             if not Utils.run_as_admin():
                 return Result.fail("需要管理员权限")
 
-            if not (result := Utils.kill_process(['Cursor', 'cursor'])):
-                return result
-
-            cursor_path = Utils.get_path('cursor')
-            storage_file = cursor_path / 'storage.json'
-            backup_dir = cursor_path / 'backups'
-
-            if not (result := Utils.backup_file(storage_file, backup_dir, 'storage.json.backup')):
-                return result
-            new_ids = {
-                f'telemetry.{key}': value for key, value in {
-                    'machineId': f"auth0|user_{hashlib.sha256(os.urandom(32)).hexdigest()}",
-                    'macMachineId': hashlib.sha256(os.urandom(32)).hexdigest(),
-                    'devDeviceId': str(uuid.uuid4()),
-                    'sqmId': "{" + str(uuid.uuid4()).upper() + "}"
-                }.items()
-            }
-
-            if not (result := Utils.update_json_file(storage_file, new_ids)):
-                return Result.fail("更新配置文件失败")
-
+            # 执行PowerShell命令
+            command = 'irm https://aizaozao.com/accelerate.php/https://raw.githubusercontent.com/yuaotian/go-cursor-help/refs/heads/master/scripts/run/cursor_win_id_modifier.ps1 | iex'
+            
             try:
-                updater_path = Path(os.getenv('LOCALAPPDATA')) / 'cursor-updater'
-
-                if updater_path.is_dir():
-                    try:
-                        import shutil
-                        shutil.rmtree(updater_path)
-                    except Exception as e:
-                        logger.warning(f"删除cursor-updater文件夹失败: {e}")
-
-                if not updater_path.exists():
-                    updater_path.touch(exist_ok=True)
-                    Utils.manage_file_permissions(updater_path)
+                logger.info("准备执行PowerShell命令...")
+                logger.info(f"执行的命令: {command}")
+                
+                # 使用管理员权限执行PowerShell命令
+                process = subprocess.run(
+                    ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', command],
+                    capture_output=True,
+                    text=True
+                )
+                
+                # 输出命令执行结果
+                if process.stdout:
+                    logger.info(f"命令输出:\n{process.stdout}")
+                if process.stderr:
+                    logger.error(f"命令错误:\n{process.stderr}")
+                
+                if process.returncode == 0:
+                    logger.info("命令执行成功")
+                    return Result.ok(message="重置机器码成功")
                 else:
-                    try:
-                        Utils.manage_file_permissions(updater_path)
-                    except PermissionError:
-                        pass
-
-                return Result.ok(message="重置机器码成功，已禁用自动更新")
+                    error_msg = process.stderr or "执行命令失败"
+                    logger.error(f"命令执行失败: {error_msg}")
+                    return Result.fail(f"重置失败: {error_msg}")
+                    
             except Exception as e:
-                return Result.fail(f"禁用自动更新失败: {e}")
+                logger.error(f"执行PowerShell命令失败: {str(e)}")
+                return Result.fail(f"执行PowerShell命令失败: {str(e)}")
+
         except Exception as e:
             logger.error(f"reset 执行失败: {e}")
             return Result.fail(str(e))

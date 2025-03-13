@@ -6,3 +6,5 @@
 /output
 /env_backups
 /.exe
+__pycache__
+.venv

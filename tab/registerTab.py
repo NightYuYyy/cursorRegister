@@ -29,6 +29,7 @@ class RegisterTab(ttk.Frame):
         self.buttons = buttons
         self.entries = entries
         self.selected_mode = selected_mode
+        self.selected_mode.set("admin")  # 设置默认为全自动模式
         self.button_commands = button_commands
         self.registrar = None
         self.setup_ui()
@@ -41,36 +42,15 @@ class RegisterTab(ttk.Frame):
                 entry.insert(0, os.getenv(var_name))
             self.entries[var_name] = entry
 
-        self.entries['cookie'] = UI.create_labeled_entry(account_frame, "Cookie", len(self.env_vars))
+        # 创建隐藏的cookie输入框
+        self.entries['cookie'] = ttk.Entry(account_frame)  # 创建但不显示
         if os.getenv('COOKIES_STR'):
             self.entries['cookie'].insert(0, os.getenv('COOKIES_STR'))
         else:
             self.entries['cookie'].insert(0, "WorkosCursorSessionToken")
 
-        radio_frame = ttk.Frame(account_frame, style='TFrame')
-        radio_frame.grid(row=len(self.env_vars) + 1, column=0, columnspan=2, sticky='w', pady=(8, 0))
-
-        mode_label = ttk.Label(radio_frame, text="注册模式:", style='TLabel')
-        mode_label.pack(side=tk.LEFT, padx=(3, 8))
-
-        modes = [
-            ("人工验证", "semi"),
-            ("自动验证", "auto"),
-            ("全自动", "admin")
-        ]
-
-        for text, value in modes:
-            ttk.Radiobutton(
-                radio_frame,
-                text=text,
-                variable=self.selected_mode,
-                value=value,
-                style='TRadiobutton'
-            ).pack(side=tk.LEFT, padx=10)
-
         button_frame = ttk.Frame(self, style='TFrame')
         button_frame.pack(pady=(8, 0))
-
 
         inner_button_frame = ttk.Frame(button_frame, style='TFrame')
         inner_button_frame.pack(expand=True)
@@ -144,54 +124,8 @@ class RegisterTab(ttk.Frame):
 
     @error_handler
     def auto_register(self) -> None:
-        mode = self.selected_mode.get()
         self._save_env_vars()
         load_dotenv(override=True)
-
-        def create_dialog(message: str) -> bool:
-            dialog = tk.Toplevel(self)
-            dialog.title("等待确认")
-            dialog.geometry(f"{DIALOG_WIDTH}x{DIALOG_HEIGHT}")
-            UI.center_window(dialog, DIALOG_CENTER_WIDTH, DIALOG_CENTER_HEIGHT)
-            dialog.transient(self)
-            dialog.grab_set()
-            ttk.Label(
-                dialog,
-                text=message,
-                wraplength=250,
-                justify="center",
-                style="TLabel"
-            ).pack(pady=20)
-
-            button_frame = ttk.Frame(dialog, style='TFrame')
-            button_frame.pack(pady=10)
-
-            result = {'continue': True}
-
-            def on_continue():
-                dialog.destroy()
-
-            def on_terminate():
-                result['continue'] = False
-                dialog.destroy()
-
-            ttk.Button(
-                button_frame,
-                text="继续",
-                command=on_continue,
-                style="Custom.TButton"
-            ).pack(side=tk.LEFT, padx=5)
-
-            ttk.Button(
-                button_frame,
-                text="终止",
-                command=on_terminate,
-                style="Custom.TButton"
-            ).pack(side=tk.LEFT, padx=5)
-
-            dialog.wait_window()
-            if not result['continue']:
-                raise Exception("用户终止了注册流程")
 
         def register_thread():
             try:
@@ -204,14 +138,7 @@ class RegisterTab(ttk.Frame):
                 self.registrar = CursorRegistration()
                 logger.debug("正在启动注册流程...")
 
-                if not (register_method := {
-                    "auto": self.registrar.auto_register,
-                    "semi": self.registrar.semi_auto_register,
-                    "admin": self.registrar.admin_auto_register
-                }.get(mode)):
-                    raise ValueError(f"未知的注册模式: {mode}")
-
-                if token := register_method(create_dialog):
+                if token := self.registrar.admin_auto_register():
                     self.winfo_toplevel().after(0, lambda: [
                         self.entries['EMAIL'].delete(0, tk.END),
                         self.entries['EMAIL'].insert(0, os.getenv('EMAIL', '未获取到')),
@@ -236,41 +163,18 @@ class RegisterTab(ttk.Frame):
                     ))
 
             except Exception as e:
-                error_msg = str(e)
-                if error_msg == "用户终止了注册流程":
-                    self.winfo_toplevel().after(0, lambda: UI.close_loading(self.winfo_toplevel()))
-                    self.winfo_toplevel().after(0, lambda: UI.show_warning(
-                        self.winfo_toplevel(),
-                        "注册流程已被终止"
-                    ))
-                else:
-                    logger.error(f"注册过程发生错误: {error_msg}")
-                    self.winfo_toplevel().after(0, lambda: UI.close_loading(self.winfo_toplevel()))
-                    self.winfo_toplevel().after(0, lambda: UI.show_error(
-                        self.winfo_toplevel(),
-                        "注册失败",
-                        error_msg
-                    ))
+                logger.error(f"注册过程发生错误: {str(e)}")
+                self.winfo_toplevel().after(0, lambda: UI.close_loading(self.winfo_toplevel()))
+                self.winfo_toplevel().after(0, lambda: UI.show_error(
+                    self.winfo_toplevel(),
+                    "注册失败",
+                    str(e)
+                ))
             finally:
                 if self.registrar and self.registrar.browser:
                     self.registrar.browser.quit()
 
-        def find_and_update_button(state: str):
-            for widget in self.winfo_children():
-                if isinstance(widget, ttk.Frame):
-                    for child in widget.winfo_children():
-                        if isinstance(child, ttk.Button) and child['text'] == "自动注册":
-                            self.after(0, lambda: child.configure(state=state))
-
-        find_and_update_button('disabled')
-        thread = threading.Thread(target=register_thread, daemon=True)
-        thread.start()
-
-        def restore_button():
-            thread.join()
-            find_and_update_button('normal')
-
-        threading.Thread(target=restore_button, daemon=True).start()
+        threading.Thread(target=register_thread, daemon=True).start()
 
     @error_handler
     def backup_account(self) -> None:
