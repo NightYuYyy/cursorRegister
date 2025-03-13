@@ -18,6 +18,7 @@ from loguru import logger
 from registerAc import CursorRegistration
 from utils import Utils, Result, error_handler, CursorManager
 from .ui import UI
+from db import NeonDB
 
 
 class RegisterTab(ttk.Frame):
@@ -32,6 +33,7 @@ class RegisterTab(ttk.Frame):
         self.selected_mode.set("admin")  # 设置默认为全自动模式
         self.button_commands = button_commands
         self.registrar = None
+        self.db = NeonDB()  # 初始化数据库连接
         self.setup_ui()
 
     def setup_ui(self):
@@ -139,6 +141,7 @@ class RegisterTab(ttk.Frame):
                 logger.debug("正在启动注册流程...")
 
                 if token := self.registrar.admin_auto_register():
+                    # 更新界面显示
                     self.winfo_toplevel().after(0, lambda: [
                         self.entries['EMAIL'].delete(0, tk.END),
                         self.entries['EMAIL'].insert(0, os.getenv('EMAIL', '未获取到')),
@@ -148,12 +151,26 @@ class RegisterTab(ttk.Frame):
                         self.entries['cookie'].insert(0, f"WorkosCursorSessionToken={token}")
                     ])
                     
+                    # 保存到数据库
+                    account_data = {
+                        'domain': os.getenv('DOMAIN', ''),
+                        'email': os.getenv('EMAIL', ''),
+                        'password': os.getenv('PASSWORD', ''),
+                        'cookies_str': f"WorkosCursorSessionToken={token}",
+                        'api_key': os.getenv('API_KEY', ''),
+                        'moe_mail_url': os.getenv('MOE_MAIL_URL', '')
+                    }
+                    
+                    if not self.db.add_account(account_data):
+                        raise RuntimeError("保存账号到数据库失败")
+                    
                     self.winfo_toplevel().after(0, lambda: UI.close_loading(self.winfo_toplevel()))
                     self.winfo_toplevel().after(0, lambda: UI.show_success(
                         self.winfo_toplevel(),
-                        "自动注册成功，账号信息已填入"
+                        "自动注册成功，账号信息已保存"
                     ))
                     
+                    # 触发备份
                     threading.Thread(target=self.backup_account, daemon=True).start()
                 else:
                     self.winfo_toplevel().after(0, lambda: UI.close_loading(self.winfo_toplevel()))
@@ -186,34 +203,50 @@ class RegisterTab(ttk.Frame):
                     "正在备份账号信息，请稍候..."
                 ))
 
-                if cookie_value := self.entries['cookie'].get().strip():
-                    if not Utils.update_env_vars({'COOKIES_STR': cookie_value}):
-                        raise RuntimeError("更新COOKIES_STR环境变量失败")
-                    load_dotenv(override=True)
+                # 获取当前账号信息
+                email = os.getenv("EMAIL", "")
+                if not email:
+                    raise ValueError("未找到账号信息，请先注册或更新账号")
 
-                env_vars = {
-                    "DOMAIN": os.getenv("DOMAIN", ""),
-                    "EMAIL": os.getenv("EMAIL", ""),
-                    "PASSWORD": os.getenv("PASSWORD", ""),
-                    "COOKIES_STR": os.getenv("COOKIES_STR", ""),
-                    "API_KEY": os.getenv("API_KEY", ""),
-                    "MOE_MAIL_URL": os.getenv("MOE_MAIL_URL", "")
+                # 从数据库获取账号信息
+                account = self.db.get_account_by_email(email)
+                if not account:
+                    raise ValueError("未找到账号信息")
+
+                # 准备备份数据
+                backup_data = {
+                    "DOMAIN": account[1],  # domain
+                    "EMAIL": account[2],   # email
+                    "PASSWORD": account[3], # password
+                    "COOKIES_STR": account[4], # cookies_str
+                    "API_KEY": account[5], # api_key
+                    "MOE_MAIL_URL": account[6], # moe_mail_url
+                    "QUOTA": account[7],   # quota
+                    "DAYS": account[8]     # days_remaining
                 }
 
-                if not any(env_vars.values()):
-                    raise ValueError("未找到任何账号信息，请先注册或更新账号")
-
+                # 创建备份目录
                 backup_dir = Path("env_backups")
                 backup_dir.mkdir(exist_ok=True)
 
+                # 生成备份文件名
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 backup_path = backup_dir / f"cursor_account_{timestamp}.csv"
 
+                # 写入备份文件
                 with open(backup_path, 'w', encoding='utf-8', newline='') as f:
                     f.write("variable,value\n")
-                    for key, value in env_vars.items():
+                    for key, value in backup_data.items():
                         if value:
                             f.write(f"{key},{value}\n")
+
+                # 同时保存到数据库备份表
+                self.db.backup_account(
+                    account_id=account[0],
+                    backup_data=backup_data,
+                    backup_type="manual",
+                    notes=f"手动备份 - {timestamp}"
+                )
 
                 self.winfo_toplevel().after(0, lambda: UI.close_loading(self.winfo_toplevel()))
                 logger.info(f"账号信息已备份到: {backup_path}")
@@ -232,3 +265,8 @@ class RegisterTab(ttk.Frame):
                 ))
 
         threading.Thread(target=backup_thread, daemon=True).start()
+
+    def __del__(self):
+        """清理资源"""
+        if hasattr(self, 'db'):
+            self.db.close_all()

@@ -35,12 +35,14 @@ from loguru import logger
 
 from utils import CursorManager, error_handler,Utils
 from .ui import UI
+from db import NeonDB
 
 
 class ManageTab(ttk.Frame):
     def __init__(self, parent, **kwargs):
         super().__init__(parent, style='TFrame', **kwargs)
         self.observer = None
+        self.db = NeonDB()  # 初始化数据库连接
         self.setup_ui()
         # 初始化时自动刷新列表和使用信息
         self.after(100, self.refresh_list)
@@ -148,6 +150,9 @@ class ManageTab(ttk.Frame):
             logger.error(f"启动文件监听失败: {str(e)}")
 
     def __del__(self):
+        """清理资源"""
+        if hasattr(self, 'db'):
+            self.db.close_all()
         if self.observer:
             self.observer.stop()
             self.observer.join()
@@ -257,16 +262,15 @@ class ManageTab(ttk.Frame):
             for item in self.account_tree.get_children():
                 self.account_tree.delete(item)
 
-            # 获取并显示账号列表
-            csv_files = self.get_csv_files()
-            for csv_file in csv_files:
-                account_data = self.parse_csv_file(csv_file)
-                self.account_tree.insert('', 'end', iid=csv_file, values=(
-                    account_data.get('DOMAIN', ''),
-                    account_data.get('EMAIL', ''),
-                    account_data.get('PASSWORD', '未知'),
-                    account_data.get('QUOTA', '未知'),
-                    account_data.get('DAYS', '未知')
+            # 从数据库获取账号列表
+            accounts = self.db.get_account_list()
+            for account in accounts:
+                self.account_tree.insert('', 'end', iid=str(account[0]), values=(
+                    account[1],  # domain
+                    account[2],  # email
+                    account[3],  # password
+                    account[7] or '未知',  # quota
+                    account[8] or '未知'   # days_remaining
                 ))
 
             logger.debug("账号列表已刷新")
@@ -278,22 +282,29 @@ class ManageTab(ttk.Frame):
         if not self.selected_item:
             raise ValueError("请先选择要操作的账号")
 
-        item_values = self.account_tree.item(self.selected_item)['values']
-        if not item_values or len(item_values) < 5:
-            raise ValueError("所选账号信息不完整")
+        account_id = int(self.selected_item)
+        account = self.db.select('accounts', condition="id = %s", condition_params=(account_id,), fetch_one=True)
+        
+        if not account:
+            raise ValueError("所选账号不存在")
 
-        csv_file_path = self.selected_item
-        account_data = self.parse_csv_file(csv_file_path)
+        account_data = {
+            'DOMAIN': account[1],
+            'EMAIL': account[2],
+            'PASSWORD': account[3],
+            'COOKIES_STR': account[4],
+            'API_KEY': account[5],
+            'MOE_MAIL_URL': account[6],
+            'QUOTA': account[7],
+            'DAYS': account[8]
+        }
 
-        if not account_data['EMAIL'] or not account_data['PASSWORD'] or not account_data['COOKIES_STR']:
-            raise ValueError("账号信息不完整")
-
-        return csv_file_path, account_data
+        return str(account_id), account_data
 
     def handle_account_action(self, action_name: str, action: Callable[[str, Dict[str, str]], None]) -> None:
         try:
-            csv_file_path, account_data = self.get_selected_account()
-            action(csv_file_path, account_data)
+            account_id, account_data = self.get_selected_account()
+            action(account_id, account_data)
         except Exception as e:
             UI.show_error(self.winfo_toplevel(), f"{action_name}失败", e)
             logger.error(f"{action_name}失败: {str(e)}")
@@ -378,7 +389,7 @@ class ManageTab(ttk.Frame):
             raise ValueError(f"JWT 解析失败: {str(e)}")
 
     def update_account_info(self):
-        def update_single_account(csv_file_path: str, account_data: Dict[str, str]) -> None:
+        def update_single_account(account_id: str, account_data: Dict[str, str]) -> None:
             cookie_str = account_data.get('COOKIES_STR', '')
             if not cookie_str:
                 raise ValueError(f"未找到账号 {account_data['EMAIL']} 的Cookie信息")
@@ -392,23 +403,24 @@ class ManageTab(ttk.Frame):
             domain, email, quota, days = self.get_trial_usage(reconstructed_cookie)
             logger.info(f"成功获取账号信息: 域名={domain}, 邮箱={email}, 额度={quota}, 天数={days}")
 
-            self.account_tree.set(csv_file_path, '域名', domain)
-            self.account_tree.set(csv_file_path, '邮箱', email)
-            self.account_tree.set(csv_file_path, '密码', account_data.get('PASSWORD', '未知'))
-            self.account_tree.set(csv_file_path, '额度', quota)
-            self.account_tree.set(csv_file_path, '剩余天数', days)
+            # 更新树形视图
+            self.account_tree.set(account_id, '域名', domain)
+            self.account_tree.set(account_id, '邮箱', email)
+            self.account_tree.set(account_id, '密码', account_data.get('PASSWORD', '未知'))
+            self.account_tree.set(account_id, '额度', quota)
+            self.account_tree.set(account_id, '剩余天数', days)
 
-            try:
-                self.update_csv_file(csv_file_path,
-                                   DOMAIN=domain,
-                                   EMAIL=email,
-                                   PASSWORD=account_data.get('PASSWORD', '未知'),
-                                   QUOTA=quota,
-                                   DAYS=days,
-                                   COOKIES_STR=reconstructed_cookie)
-            except Exception as e:
-                logger.error(f"更新CSV文件失败: {str(e)}")
-                raise ValueError(f"更新CSV文件失败: {str(e)}")
+            # 更新数据库
+            update_data = {
+                'domain': domain,
+                'email': email,
+                'cookies_str': reconstructed_cookie,
+                'quota': quota,
+                'days_remaining': days
+            }
+            
+            if not self.db.update_account(int(account_id), update_data):
+                raise ValueError(f"更新数据库失败: {account_data['EMAIL']}")
 
             return f"域名: {domain}\n邮箱: {email}\n密码: {account_data.get('PASSWORD', '未知')}\n可用额度: {quota}\n剩余天数: {days}"
 
@@ -427,15 +439,25 @@ class ManageTab(ttk.Frame):
                 # 确定要更新的账号列表
                 if self.selected_item:
                     # 如果有选中项，只更新选中的账号
-                    accounts_to_update = [(self.selected_item, self.parse_csv_file(self.selected_item))]
+                    accounts_to_update = [self.get_selected_account()]
                 else:
                     # 如果没有选中项，更新所有账号
-                    accounts_to_update = [(file, self.parse_csv_file(file)) for file in self.get_csv_files()]
+                    accounts = self.db.get_account_list()
+                    accounts_to_update = [(str(acc[0]), {
+                        'DOMAIN': acc[1],
+                        'EMAIL': acc[2],
+                        'PASSWORD': acc[3],
+                        'COOKIES_STR': acc[4],
+                        'API_KEY': acc[5],
+                        'MOE_MAIL_URL': acc[6],
+                        'QUOTA': acc[7],
+                        'DAYS': acc[8]
+                    }) for acc in accounts]
 
                 # 更新每个账号
-                for csv_file, account_data in accounts_to_update:
+                for account_id, account_data in accounts_to_update:
                     try:
-                        result = update_single_account(csv_file, account_data)
+                        result = update_single_account(account_id, account_data)
                         success_count += 1
                         logger.info(f"成功更新账号: {account_data.get('EMAIL', '')}")
                     except Exception as e:
@@ -472,7 +494,7 @@ class ManageTab(ttk.Frame):
         threading.Thread(target=update_process, daemon=True).start()
 
     def update_auth(self) -> None:
-        def update_account_auth(csv_file_path: str, account_data: Dict[str, str]) -> None:
+        def update_account_auth(account_id: str, account_data: Dict[str, str]) -> None:
             cookie_str = account_data.get('COOKIES_STR', '')
             email = account_data.get('EMAIL', '')
             if not cookie_str:
@@ -511,7 +533,7 @@ class ManageTab(ttk.Frame):
         self.handle_account_action("刷新Cookie", update_account_auth)
 
     def delete_account(self):
-        def delete_account_file(csv_file_path: str, account_data: Dict[str, str]) -> None:
+        def delete_account_file(account_id: str, account_data: Dict[str, str]) -> None:
             confirm_message = (
                 f"确定要删除以下账号吗？\n\n"
                 f"邮箱：{account_data['EMAIL']}\n"
@@ -530,7 +552,11 @@ class ManageTab(ttk.Frame):
                         "正在删除账号信息，请稍候..."
                     ))
 
-                    os.remove(csv_file_path)
+                    # 从数据库删除账号
+                    if not self.db.delete_account(int(account_id)):
+                        raise ValueError("从数据库删除账号失败")
+                    
+                    # 从树形视图删除
                     self.account_tree.delete(self.selected_item)
                     
                     self.winfo_toplevel().after(0, lambda: UI.close_loading(self.winfo_toplevel()))
@@ -595,13 +621,13 @@ class ManageTab(ttk.Frame):
         """静默更新所有账号信息"""
         def update_process():
             try:
-                accounts_to_update = [(file, self.parse_csv_file(file)) for file in self.get_csv_files()]
+                accounts = self.db.get_account_list()
                 
-                for csv_file, account_data in accounts_to_update:
+                for account in accounts:
                     try:
-                        cookie_str = account_data.get('COOKIES_STR', '')
+                        cookie_str = account[4]  # cookies_str
                         if not cookie_str:
-                            logger.warning(f"账号 {account_data.get('EMAIL', '')} 缺少Cookie信息，跳过更新")
+                            logger.warning(f"账号 {account[2]} 缺少Cookie信息，跳过更新")
                             continue
 
                         user_id = self.extract_user_id_from_jwt(cookie_str)
@@ -609,23 +635,29 @@ class ManageTab(ttk.Frame):
 
                         domain, email, quota, days = self.get_trial_usage(reconstructed_cookie)
                         
-                        self.account_tree.set(csv_file, '域名', domain)
-                        self.account_tree.set(csv_file, '邮箱', email)
-                        self.account_tree.set(csv_file, '密码', account_data.get('PASSWORD', '未知'))
-                        self.account_tree.set(csv_file, '额度', quota)
-                        self.account_tree.set(csv_file, '剩余天数', days)
+                        # 更新树形视图
+                        self.account_tree.set(str(account[0]), '域名', domain)
+                        self.account_tree.set(str(account[0]), '邮箱', email)
+                        self.account_tree.set(str(account[0]), '密码', account[3])
+                        self.account_tree.set(str(account[0]), '额度', quota)
+                        self.account_tree.set(str(account[0]), '剩余天数', days)
 
-                        self.update_csv_file(csv_file,
-                                          DOMAIN=domain,
-                                          EMAIL=email,
-                                          PASSWORD=account_data.get('PASSWORD', '未知'),
-                                          QUOTA=quota,
-                                          DAYS=days,
-                                          COOKIES_STR=reconstructed_cookie)
+                        # 更新数据库
+                        update_data = {
+                            'domain': domain,
+                            'email': email,
+                            'cookies_str': reconstructed_cookie,
+                            'quota': quota,
+                            'days_remaining': days
+                        }
+                        
+                        if not self.db.update_account(account[0], update_data):
+                            logger.error(f"更新数据库失败: {email}")
+                            continue
                         
                         logger.info(f"自动更新账号成功: {email}")
                     except Exception as e:
-                        logger.error(f"自动更新账号 {account_data.get('EMAIL', '')} 失败: {str(e)}")
+                        logger.error(f"自动更新账号 {account[2]} 失败: {str(e)}")
                         continue
 
             except Exception as e:

@@ -10,13 +10,103 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from tkinter import ttk
 from typing import Dict, List, Tuple
+from datetime import datetime
 
 from dotenv import load_dotenv
 from loguru import logger
-
-from tab import LogWindow, ManageTab, RegisterTab, AboutTab, UI
+from db import NeonDB  # 导入 NeonDB
+import glob
 
 console_mode = False
+
+# 配置 loguru 日志
+log_path = os.path.join('logs', f'app_{datetime.now().strftime("%Y%m%d")}.log')
+os.makedirs('logs', exist_ok=True)
+logger.add(log_path, rotation="500 MB", encoding='utf-8')
+
+def sync_accounts_to_db():
+    """同步本地账号数据到数据库"""
+    try:
+        db = NeonDB()
+        
+        # 同步当前的 .env 文件
+        logger.info("正在同步当前账号信息...")
+        if os.path.exists('.env'):
+            db.import_from_csv('.env')
+            logger.info("当前账号信息同步成功")
+        
+        # 同步备份文件
+        backup_dir = 'env_backups'
+        if os.path.exists(backup_dir):
+            backup_files = glob.glob(os.path.join(backup_dir, 'cursor_account_*.csv'))
+            for backup_file in backup_files:
+                logger.info(f"正在同步备份文件: {backup_file}")
+                db.import_from_csv(backup_file)
+            
+            if backup_files:
+                logger.info(f"成功同步 {len(backup_files)} 个备份文件")
+        
+        # 获取同步后的账号数量
+        accounts = db.get_account_list()
+        logger.info(f"数据库中现有账号数量: {len(accounts) if accounts else 0}")
+        
+        db.close_all()
+        return True
+    except Exception as e:
+        logger.error(f"同步账号数据失败: {str(e)}")
+        return False
+
+def test_db_import():
+    """测试数据库导入功能"""
+    try:
+        db = NeonDB()
+        
+        # 测试导入单个文件
+        test_file = 'env_backups/cursor_account_20250313_213022.csv'
+        logger.info(f"测试导入文件: {test_file}")
+        
+        # 读取文件内容
+        with open(test_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+            logger.info(f"文件内容:\n{content}")
+        
+        # 尝试导入
+        if db.import_from_csv(test_file):
+            logger.info("文件导入成功")
+        else:
+            logger.error("文件导入失败")
+        
+        # 验证导入结果
+        accounts = db.get_account_list()
+        logger.info(f"数据库中的账号数量: {len(accounts) if accounts else 0}")
+        if accounts:
+            for account in accounts:
+                logger.info(f"账号信息: {account}")
+        
+        db.close_all()
+        return True
+    except Exception as e:
+        logger.error(f"测试失败: {str(e)}")
+        logger.exception("详细错误信息:")
+        return False
+
+# 初始化数据库并同步账号
+try:
+    db = NeonDB()
+    if db.init_database():
+        logger.info("数据库初始化成功")
+        # 测试数据导入
+        if test_db_import():
+            logger.info("数据导入测试成功")
+        else:
+            logger.error("数据导入测试失败")
+    else:
+        logger.error("数据库初始化失败")
+    db.close_all()
+except Exception as e:
+    logger.error(f"数据库初始化出错: {str(e)}")
+
+from tab import LogWindow, ManageTab, RegisterTab, AboutTab, UI
 
 
 @dataclass

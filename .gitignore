@@ -1,5 +1,6 @@
 /.env
 /cursorRegister_log
+/logs
 /.idea
 /build
 /dist
