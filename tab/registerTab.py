@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import ttk
 from typing import Dict, List, Tuple, Callable
+import glob
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -265,6 +266,52 @@ class RegisterTab(ttk.Frame):
                 ))
 
         threading.Thread(target=backup_thread, daemon=True).start()
+
+    @error_handler
+    def import_data(self) -> None:
+        def import_thread():
+            try:
+                self.winfo_toplevel().after(0, lambda: UI.show_loading(
+                    self.winfo_toplevel(),
+                    "导入数据",
+                    "正在导入本地数据到数据库，请稍候..."
+                ))
+
+                # 同步当前的 .env 文件
+                if os.path.exists('.env'):
+                    self.db.import_from_csv('.env')
+                    logger.info("当前账号信息同步成功")
+                
+                # 同步备份文件
+                backup_dir = 'env_backups'
+                imported_count = 0
+                if os.path.exists(backup_dir):
+                    backup_files = glob.glob(os.path.join(backup_dir, 'cursor_account_*.csv'))
+                    for backup_file in backup_files:
+                        logger.info(f"正在同步备份文件: {backup_file}")
+                        if self.db.import_from_csv(backup_file):
+                            imported_count += 1
+                
+                # 获取同步后的账号数量
+                accounts = self.db.get_account_list()
+                total_accounts = len(accounts) if accounts else 0
+                
+                self.winfo_toplevel().after(0, lambda: UI.close_loading(self.winfo_toplevel()))
+                self.winfo_toplevel().after(0, lambda: UI.show_success(
+                    self.winfo_toplevel(),
+                    f"数据导入成功\n成功导入 {imported_count} 个备份文件\n数据库中现有 {total_accounts} 个账号"
+                ))
+
+            except Exception as e:
+                logger.error(f"导入数据失败: {str(e)}")
+                self.winfo_toplevel().after(0, lambda: UI.close_loading(self.winfo_toplevel()))
+                self.winfo_toplevel().after(0, lambda: UI.show_error(
+                    self.winfo_toplevel(),
+                    "导入数据失败",
+                    str(e)
+                ))
+
+        threading.Thread(target=import_thread, daemon=True).start()
 
     def __del__(self):
         """清理资源"""

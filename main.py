@@ -95,11 +95,11 @@ try:
     db = NeonDB()
     if db.init_database():
         logger.info("数据库初始化成功")
-        # 测试数据导入
-        if test_db_import():
-            logger.info("数据导入测试成功")
-        else:
-            logger.error("数据导入测试失败")
+        # 注释掉自动测试导入
+        # if test_db_import():
+        #     logger.info("数据导入测试成功")
+        # else:
+        #     logger.error("数据导入测试失败")
     else:
         logger.error("数据库初始化失败")
     db.close_all()
@@ -125,7 +125,8 @@ class WindowConfig:
     buttons: List[Tuple[str, str]] = field(default_factory=lambda: [
         ("生成账号", "generate_account"),
         ("注册账号", "auto_register"),
-        ("备份账号", "backup_account")
+        ("备份账号", "backup_account"),
+        ("导入数据", "import_data")
     ])
 
 
