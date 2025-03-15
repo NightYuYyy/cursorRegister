@@ -41,8 +41,12 @@ from db import NeonDB
 class ManageTab(ttk.Frame):
     def __init__(self, parent, **kwargs):
         super().__init__(parent, style='TFrame', **kwargs)
+        self.selected_item = None
+        self.context_menu = None
+        self.account_tree = None
         self.observer = None
-        self.db = NeonDB()  # 初始化数据库连接
+        # 增加连接池配置
+        self.db = NeonDB(min_conn=2, max_conn=10, max_retries=5)
         self.setup_ui()
         # 初始化时自动刷新列表和使用信息
         self.after(100, self.refresh_list)
@@ -108,7 +112,6 @@ class ManageTab(ttk.Frame):
                   style='Custom.TButton', width=BUTTON_WIDTH).pack(side=tk.LEFT, padx=PADDING['MEDIUM'])
 
         self.account_tree = tree
-        self.selected_item = None
 
     def start_file_monitoring(self):
         try:
@@ -151,8 +154,13 @@ class ManageTab(ttk.Frame):
 
     def __del__(self):
         """清理资源"""
-        if hasattr(self, 'db'):
-            self.db.close_all()
+        try:
+            if hasattr(self, 'db'):
+                self.db.close_all()
+                logger.info("数据库连接已关闭")
+        except Exception as e:
+            logger.error(f"关闭数据库连接失败: {e}")
+            
         if self.observer:
             self.observer.stop()
             self.observer.join()
@@ -420,7 +428,7 @@ class ManageTab(ttk.Frame):
             }
             
             if not self.db.update_account(int(account_id), update_data):
-                raise ValueError(f"更新数据库失败: {account_data['EMAIL']}")
+                raise ValueError(f"更新数据库失败: {email}")
 
             return f"域名: {domain}\n邮箱: {email}\n密码: {account_data.get('PASSWORD', '未知')}\n可用额度: {quota}\n剩余天数: {days}"
 
@@ -473,10 +481,14 @@ class ManageTab(ttk.Frame):
                     message = f"成功更新 {success_count} 个账号"
                     UI.show_success(self.winfo_toplevel(), message)
                 elif success_count > 0 and failed_count > 0:
-                    message = f"更新完成\n成功: {success_count} 个\n失败: {failed_count} 个\n\n失败详情:\n" + "\n".join(error_messages)
-                    UI.show_warning(self.winfo_toplevel(), "部分更新失败", message)
+                    message = f"部分账号更新失败\n成功: {success_count} 个\n失败: {failed_count} 个"
+                    if error_messages:
+                        message += "\n\n失败详情:\n" + "\n".join(error_messages)
+                    UI.show_error(self.winfo_toplevel(), "更新失败", message)
                 else:
-                    message = f"所有账号更新失败\n\n失败详情:\n" + "\n".join(error_messages)
+                    message = "所有账号更新失败"
+                    if error_messages:
+                        message += "\n\n失败详情:\n" + "\n".join(error_messages)
                     UI.show_error(self.winfo_toplevel(), "更新失败", message)
 
             except Exception as e:

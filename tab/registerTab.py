@@ -12,6 +12,7 @@ from pathlib import Path
 from tkinter import ttk
 from typing import Dict, List, Tuple, Callable
 import glob
+import time
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -83,6 +84,27 @@ class RegisterTab(ttk.Frame):
     def generate_account(self) -> None:
         def generate_thread():
             try:
+                # 验证必填字段
+                required_fields = {
+                    'DOMAIN': '域名',
+                    'API_KEY': 'API密钥',
+                    'MOE_MAIL_URL': '邮箱服务地址'
+                }
+                
+                missing_fields = []
+                for field, label in required_fields.items():
+                    if not self.entries[field].get().strip():
+                        missing_fields.append(label)
+                
+                if missing_fields:
+                    error_msg = f"以下字段不能为空：\n{', '.join(missing_fields)}"
+                    self.winfo_toplevel().after(0, lambda msg=error_msg: UI.show_error(
+                        self.winfo_toplevel(),
+                        "生成账号失败",
+                        msg
+                    ))
+                    return
+
                 self.winfo_toplevel().after(0, lambda: UI.show_loading(
                     self.winfo_toplevel(),
                     "生成账号",
@@ -116,17 +138,40 @@ class RegisterTab(ttk.Frame):
                 ))
 
             except Exception as e:
+                error_msg = str(e)
+                logger.error(f"生成账号失败: {error_msg}")
                 self.winfo_toplevel().after(0, lambda: UI.close_loading(self.winfo_toplevel()))
-                self.winfo_toplevel().after(0, lambda: UI.show_error(
+                self.winfo_toplevel().after(0, lambda msg=error_msg: UI.show_error(
                     self.winfo_toplevel(),
                     "生成账号失败",
-                    str(e)
+                    msg
                 ))
 
         threading.Thread(target=generate_thread, daemon=True).start()
 
     @error_handler
     def auto_register(self) -> None:
+        # 验证必填字段
+        required_fields = {
+            'DOMAIN': '域名',
+            'API_KEY': 'API密钥',
+            'MOE_MAIL_URL': '邮箱服务地址'
+        }
+        
+        missing_fields = []
+        for field, label in required_fields.items():
+            if not self.entries[field].get().strip():
+                missing_fields.append(label)
+        
+        if missing_fields:
+            error_msg = f"以下字段不能为空：\n{', '.join(missing_fields)}"
+            UI.show_error(self.winfo_toplevel(), "注册失败", error_msg)
+            return
+
+        # 检查邮箱和密码是否为空，如果为空则自动生成
+        if not self.entries['EMAIL'].get().strip() or not self.entries['PASSWORD'].get().strip():
+            self.generate_account()
+            
         self._save_env_vars()
         load_dotenv(override=True)
 
@@ -162,17 +207,52 @@ class RegisterTab(ttk.Frame):
                         'moe_mail_url': os.getenv('MOE_MAIL_URL', '')
                     }
                     
-                    if not self.db.add_account(account_data):
-                        raise RuntimeError("保存账号到数据库失败")
+                    # 使用新的数据库连接
+                    db = NeonDB()
+                    try:
+                        if not db.add_account(account_data):
+                            raise RuntimeError("保存账号到数据库失败")
+                    finally:
+                        db.close_all()
                     
                     self.winfo_toplevel().after(0, lambda: UI.close_loading(self.winfo_toplevel()))
                     self.winfo_toplevel().after(0, lambda: UI.show_success(
                         self.winfo_toplevel(),
                         "自动注册成功，账号信息已保存"
                     ))
-                    
-                    # 触发备份
-                    threading.Thread(target=self.backup_account, daemon=True).start()
+
+                    def delayed_refresh():
+                        try:
+                            # 等待确保数据库事务完全提交
+                            time.sleep(2)
+                            
+                            # 找到管理标签页
+                            manage_tab = None
+                            for tab in self.winfo_toplevel().winfo_children():
+                                if hasattr(tab, 'refresh_list'):
+                                    manage_tab = tab
+                                    break
+                            
+                            if manage_tab:
+                                # 在主线程中执行刷新
+                                def do_refresh():
+                                    try:
+                                        # 刷新列表
+                                        manage_tab.refresh_list()
+                                        # 延迟1秒后更新使用信息
+                                        self.winfo_toplevel().after(1000, manage_tab.auto_update_info)
+                                    except Exception as e:
+                                        logger.error(f"刷新列表失败: {str(e)}")
+                                
+                                self.winfo_toplevel().after(0, do_refresh)
+                            else:
+                                logger.warning("未找到管理标签页，无法刷新列表")
+                                
+                        except Exception as e:
+                            logger.error(f"延迟刷新失败: {str(e)}")
+
+                    # 在新线程中执行延迟刷新
+                    threading.Thread(target=delayed_refresh, daemon=True).start()
                 else:
                     self.winfo_toplevel().after(0, lambda: UI.close_loading(self.winfo_toplevel()))
                     self.winfo_toplevel().after(0, lambda: UI.show_warning(
@@ -181,12 +261,13 @@ class RegisterTab(ttk.Frame):
                     ))
 
             except Exception as e:
-                logger.error(f"注册过程发生错误: {str(e)}")
+                error_msg = str(e)
+                logger.error(f"注册过程发生错误: {error_msg}")
                 self.winfo_toplevel().after(0, lambda: UI.close_loading(self.winfo_toplevel()))
-                self.winfo_toplevel().after(0, lambda: UI.show_error(
+                self.winfo_toplevel().after(0, lambda msg=error_msg: UI.show_error(
                     self.winfo_toplevel(),
                     "注册失败",
-                    str(e)
+                    msg
                 ))
             finally:
                 if self.registrar and self.registrar.browser:

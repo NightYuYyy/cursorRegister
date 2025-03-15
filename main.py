@@ -125,7 +125,6 @@ class WindowConfig:
     buttons: List[Tuple[str, str]] = field(default_factory=lambda: [
         ("生成账号", "generate_account"),
         ("注册账号", "auto_register"),
-        ("备份账号", "backup_account"),
         ("导入数据", "import_data")
     ])
 

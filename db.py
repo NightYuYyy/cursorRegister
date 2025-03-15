@@ -398,27 +398,12 @@ class NeonDB:
         ]
         return self.create_table('accounts', columns)
 
-    def create_account_backups_table(self):
-        """
-        创建账号备份表
-        """
-        columns = [
-            "id SERIAL PRIMARY KEY",
-            "account_id INTEGER REFERENCES accounts(id) ON DELETE CASCADE",
-            "backup_data JSONB NOT NULL",
-            "backup_type VARCHAR(50) NOT NULL",
-            "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
-            "notes TEXT"
-        ]
-        return self.create_table('account_backups', columns)
-
     def init_database(self):
         """
         初始化数据库，创建所有必要的表
         """
         try:
             self.create_accounts_table()
-            self.create_account_backups_table()
             logger.info("数据库初始化完成")
             return True
         except Exception as e:
@@ -458,31 +443,6 @@ class NeonDB:
             logger.error(f"添加账号失败: {e}")
             return None
 
-    def backup_account(self, account_id, backup_data, backup_type="manual", notes=None):
-        """
-        备份账号数据
-        
-        Args:
-            account_id (int): 账号 ID
-            backup_data (dict): 要备份的数据
-            backup_type (str): 备份类型，默认为 "manual"
-            notes (str): 备份说明
-            
-        Returns:
-            int: 备份记录的 ID，如果失败则返回 None
-        """
-        backup = {
-            'account_id': account_id,
-            'backup_data': backup_data,
-            'backup_type': backup_type,
-            'notes': notes
-        }
-        try:
-            return self.insert('account_backups', backup, return_id=True)
-        except Exception as e:
-            logger.error(f"备份账号数据失败: {e}")
-            return None
-
     def get_account_list(self, status=None, limit=None, offset=None):
         """
         获取账号列表
@@ -518,85 +478,6 @@ class NeonDB:
         except Exception as e:
             logger.error(f"获取账号列表失败: {e}")
             return []
-
-    def get_account_backups(self, account_id):
-        """
-        获取账号的所有备份
-        
-        Args:
-            account_id (int): 账号 ID
-            
-        Returns:
-            list: 备份列表
-        """
-        try:
-            return self.select(
-                'account_backups',
-                columns="*",
-                condition="account_id = %s",
-                condition_params=(account_id,),
-                order_by="created_at DESC",
-                fetch_all=True
-            )
-        except Exception as e:
-            logger.error(f"获取账号备份失败: {e}")
-            return []
-
-    def update_account(self, account_id, update_data):
-        """
-        更新账号信息
-        
-        Args:
-            account_id (int): 账号 ID
-            update_data (dict): 要更新的数据，可以包含以下字段：
-                - domain: 域名
-                - email: 邮箱
-                - password: 密码
-                - cookies_str: Cookie字符串
-                - api_key: API密钥
-                - moe_mail_url: 邮箱服务地址
-                - quota: 额度信息
-                - days_remaining: 剩余天数
-                - status: 状态
-            
-        Returns:
-            bool: 是否更新成功
-        """
-        try:
-            # 添加更新时间
-            update_data['updated_at'] = datetime.now()
-            
-            result = self.update(
-                'accounts',
-                update_data,
-                condition="id = %s",
-                condition_params=(account_id,)
-            )
-            return result > 0
-        except Exception as e:
-            logger.error(f"更新账号信息失败: {e}")
-            return False
-
-    def delete_account(self, account_id):
-        """
-        删除账号
-        
-        Args:
-            account_id (int): 账号 ID
-            
-        Returns:
-            bool: 是否删除成功
-        """
-        try:
-            result = self.delete(
-                'accounts',
-                condition="id = %s",
-                condition_params=(account_id,)
-            )
-            return result > 0
-        except Exception as e:
-            logger.error(f"删除账号失败: {e}")
-            return False
 
     def get_account_by_email(self, email):
         """
@@ -734,6 +615,51 @@ class NeonDB:
             return True
         except Exception as e:
             logger.error(f"导出账号到 CSV 失败: {e}")
+            return False
+
+    def update_account(self, account_id, update_data):
+        """
+        更新账号信息
+        
+        Args:
+            account_id (int): 账号 ID
+            update_data (dict): 要更新的数据，可以包含以下字段：
+                - domain: 域名
+                - email: 邮箱
+                - password: 密码
+                - cookies_str: Cookie字符串
+                - api_key: API密钥
+                - moe_mail_url: 邮箱服务地址
+                - quota: 额度信息
+                - days_remaining: 剩余天数
+                - status: 状态
+            
+        Returns:
+            bool: 是否更新成功
+        """
+        try:
+            # 添加更新时间
+            update_data['updated_at'] = datetime.now()
+            
+            # 构建 SQL 更新语句
+            set_clauses = []
+            values = []
+            for key, value in update_data.items():
+                set_clauses.append(f"{key} = %s")
+                values.append(value)
+            
+            # 添加 WHERE 条件的参数
+            values.append(account_id)
+            
+            # 执行更新
+            sql = f"UPDATE accounts SET {', '.join(set_clauses)} WHERE id = %s"
+            with self.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(sql, values)
+                    return cur.rowcount > 0
+                    
+        except Exception as e:
+            logger.error(f"更新账号信息失败: {e}")
             return False
 
 
